@@ -252,7 +252,7 @@ if __name__ == "__main__":
         print(f"Average episodic return over training: {avg_return:.2f}")
 
     # Always evaluate the model after training
-    model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
+    model_path = f"runs/{run_name}/{args.exp_name}_seed{args.seed}.cleanrl_model"
     torch.save(q_network.state_dict(), model_path)
     print(f"model saved to {model_path}")
     
@@ -286,7 +286,7 @@ if __name__ == "__main__":
 
     if args.save_model:
         # Save evaluation results to file
-        eval_results_path = f"runs/{run_name}/eval_results.txt"
+        eval_results_path = f"runs/{run_name}/eval_results_seed{args.seed}.txt"
         with open(eval_results_path, 'w') as f:
             f.write(f"Evaluation Results:\n")
             f.write(f"Returns: {eval_episodic_returns}\n")
