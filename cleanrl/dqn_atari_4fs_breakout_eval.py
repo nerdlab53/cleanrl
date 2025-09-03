@@ -33,7 +33,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -230,6 +230,7 @@ if __name__ == "__main__":
                 if global_step % 100 == 0:
                     writer.add_scalar("losses/td_loss", loss, global_step)
                     writer.add_scalar("losses/q_values", old_val.mean().item(), global_step)
+                    writer.add_scalar("charts/epsilon", epsilon, global_step)
                     print("SPS:", int(global_step / (time.time() - start_time)))
                     writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
@@ -256,7 +257,7 @@ if __name__ == "__main__":
     print(f"model saved to {model_path}")
     
     from cleanrl_utils.evals.dqn_eval import evaluate
-    eval_episodic_returns = evaluate(
+    eval_episodic_returns, eval_episodic_lengths = evaluate(
         model_path,
         make_env,
         args.env_id,
@@ -269,19 +270,30 @@ if __name__ == "__main__":
     
     # Print evaluation results
     avg_eval_return = np.mean(eval_episodic_returns)
+    avg_eval_length = np.mean(eval_episodic_lengths)
+    std_eval_return = np.std(eval_episodic_returns)
     print(f"Evaluation results over 10 episodes: {eval_episodic_returns}")
     print(f"Average evaluation return: {avg_eval_return:.2f}")
+    print(f"Average evaluation length: {avg_eval_length:.2f}")
+    print(f"Std deviation of evaluation returns: {std_eval_return:.2f}")
     
-    for idx, episodic_return in enumerate(eval_episodic_returns):
+    for idx, (episodic_return, episodic_length) in enumerate(zip(eval_episodic_returns, eval_episodic_lengths)):
         writer.add_scalar("eval/episodic_return", episodic_return, idx)
+        writer.add_scalar("eval/episodic_length", episodic_length, idx)
+    writer.add_scalar("eval/average_return", avg_eval_return)
+    writer.add_scalar("eval/average_length", avg_eval_length)
+    writer.add_scalar("eval/std_return", std_eval_return)
 
     if args.save_model:
         # Save evaluation results to file
         eval_results_path = f"runs/{run_name}/eval_results.txt"
         with open(eval_results_path, 'w') as f:
             f.write(f"Evaluation Results:\n")
-            f.write(f"Episodes: {eval_episodic_returns}\n")
-            f.write(f"Average: {avg_eval_return:.2f}\n")
+            f.write(f"Returns: {eval_episodic_returns}\n")
+            f.write(f"Lengths: {eval_episodic_lengths}\n")
+            f.write(f"Average return: {avg_eval_return:.2f}\n")
+            f.write(f"Average length: {avg_eval_length:.2f}\n")
+            f.write(f"Std return: {std_eval_return:.2f}\n")
         print(f"Evaluation results saved to {eval_results_path}")
 
         if args.upload_model:
