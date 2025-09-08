@@ -153,11 +153,19 @@ if __name__ == "__main__":
             save_code=True,
         )
     writer = SummaryWriter(f"runs/{run_name}")
-    # helper: always write to TensorBoard; mirror to W&B with explicit step when tracking is enabled
+    # helper: always write to TensorBoard; mirror to W&B without explicit step (TB syncing)
     def wb_log(tag: str, value, step: int):
         if args.track:
             try:
-                wandb.log({tag: float(value) if hasattr(value, "__float__") else value}, step=step)
+                import numpy as _np
+                # convert JAX/NumPy scalars safely, avoid deprecated implicit conversion warnings
+                if hasattr(value, "item"):
+                    v = value.item()
+                else:
+                    arr = _np.asarray(value)
+                    v = arr.item() if arr.shape == () or arr.size == 1 else value
+                # when using sync_tensorboard=True, do not set step; log global_step as a metric instead
+                wandb.log({tag: v, "global_step": step})
             except Exception:
                 # best-effort logging; never crash training due to logging
                 pass
