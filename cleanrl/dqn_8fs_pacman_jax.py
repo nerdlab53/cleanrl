@@ -51,7 +51,7 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "ALE/MsPacman-v5"
+    env_id: str = "MsPacman-v4"
     """the id of the environment"""
     total_timesteps: int = 2_000_000
     """total timesteps of the experiments"""
@@ -149,26 +149,9 @@ if __name__ == "__main__":
             sync_tensorboard=True,
             config=vars(args),
             name=run_name,
-            monitor_gym=True,
             save_code=True,
         )
     writer = SummaryWriter(f"runs/{run_name}")
-    # helper: always write to TensorBoard; mirror to W&B without explicit step (TB syncing)
-    def wb_log(tag: str, value, step: int):
-        if args.track:
-            try:
-                import numpy as _np
-                # convert JAX/NumPy scalars safely, avoid deprecated implicit conversion warnings
-                if hasattr(value, "item"):
-                    v = value.item()
-                else:
-                    arr = _np.asarray(value)
-                    v = arr.item() if arr.shape == () or arr.size == 1 else value
-                # when using sync_tensorboard=True, do not set step; log global_step as a metric instead
-                wandb.log({tag: v, "global_step": step})
-            except Exception:
-                # best-effort logging; never crash training due to logging
-                pass
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -227,13 +210,13 @@ if __name__ == "__main__":
 
     start_time = time.time()
 
+    episodic_returns = []
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
         writer.add_scalar("charts/epsilon", epsilon, global_step)
-        wb_log("charts/epsilon", epsilon, global_step)
         if random.random() < epsilon:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
         else:
@@ -248,11 +231,10 @@ if __name__ == "__main__":
         if "final_info" in infos:
             for info in infos["final_info"]:
                 if info and "episode" in info:
+                    episodic_returns.append(info['episode']['r'])
                     print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                     writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
-                    wb_log("charts/episodic_return", info["episode"]["r"], global_step)
-                    wb_log("charts/episodic_length", info["episode"]["l"], global_step)
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
         real_next_obs = next_obs.copy()
@@ -285,14 +267,10 @@ if __name__ == "__main__":
                     writer.add_scalar("losses/td_loss", _loss, global_step)
                     writer.add_scalar("losses/q_values", _q_mean, global_step)
                     writer.add_scalar("losses/max_q_value", _q_max, global_step)
-                    wb_log("losses/td_loss", _loss, global_step)
-                    wb_log("losses/q_values", _q_mean, global_step)
-                    wb_log("losses/max_q_value", _q_max, global_step)
                     # writer.add_scalar("charts/buffer_occupancy", rb.size, global_step)  # optional
                     print("SPS:", int(global_step / (time.time() - start_time)))
                     _sps = int(global_step / (time.time() - start_time))
                     writer.add_scalar("charts/SPS", _sps, global_step)
-                    wb_log("charts/SPS", _sps, global_step)
 
             # update target network
             if global_step % args.target_network_frequency == 0:
@@ -300,7 +278,9 @@ if __name__ == "__main__":
                     target_params=optax.incremental_update(q_state.params, q_state.target_params, args.tau)
                 )
                 writer.add_scalar("charts/target_update", 1, global_step)
-                wb_log("charts/target_update", 1, global_step)
+    
+    if episodic_returns:
+        print(f"Average episodic return over training : {np.mean(episodic_returns)}")
 
     if args.save_model:
         model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
@@ -330,8 +310,6 @@ if __name__ == "__main__":
         for idx, (episodic_return, episodic_length) in enumerate(zip(eval_episodic_returns, eval_episodic_lengths)):
             writer.add_scalar("eval/episodic_return", episodic_return, idx)
             writer.add_scalar("eval/episodic_length", episodic_length, idx)
-            wb_log("eval/episodic_return", episodic_return, idx)
-            wb_log("eval/episodic_length", episodic_length, idx)
         if args.save_model:
             # Save evaluation results to file
             eval_results_path = f"runs/{run_name}/eval_results_seed{args.seed}.txt"
