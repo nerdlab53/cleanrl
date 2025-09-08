@@ -50,7 +50,7 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "MsPacman-v5"
+    env_id: str = "ALE/MsPacman-v5"
     """the id of the environment"""
     total_timesteps: int = 2_000_000
     """total timesteps of the experiments"""
