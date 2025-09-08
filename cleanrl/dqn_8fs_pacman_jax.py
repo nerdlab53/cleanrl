@@ -5,7 +5,8 @@ import time
 from dataclasses import dataclass
 
 # see https://github.com/google/jax/discussions/6332#discussioncomment-1279991
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.7"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.7"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.3"
 
 import flax
 import flax.linen as nn
