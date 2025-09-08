@@ -36,7 +36,7 @@ class Args:
     """seed of the experiment"""
     track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "cleanRL-jax"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -50,21 +50,21 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "BreakoutNoFrameskip-v4"
+    env_id: str = "MsPacman-v4"
     """the id of the environment"""
-    total_timesteps: int = 10000000
+    total_timesteps: int = 2_000_000
     """total timesteps of the experiments"""
     learning_rate: float = 1e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
-    buffer_size: int = 1000000
+    buffer_size: int = 500_000
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
     tau: float = 1.0
     """the target network update rate"""
-    target_network_frequency: int = 1000
+    target_network_frequency: int = 1_000
     """the timesteps it takes to update the target network"""
     batch_size: int = 32
     """the batch size of sample from the reply memory"""
@@ -74,7 +74,7 @@ class Args:
     """the ending epsilon for exploration"""
     exploration_fraction: float = 0.10
     """the fraction of `total-timesteps` it takes from start-e to go end-e"""
-    learning_starts: int = 80000
+    learning_starts: int = 80_000
     """timestep to start learning"""
     train_frequency: int = 4
     """the frequency of training"""
@@ -97,7 +97,7 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         env = ClipRewardEnv(env)
         env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.GrayScaleObservation(env)
-        env = gym.wrappers.FrameStack(env, 4)
+        env = gym.wrappers.FrameStack(env, 8)
 
         env.action_space.seed(seed)
         return env
@@ -214,6 +214,7 @@ if __name__ == "__main__":
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
+        writer.add_scalar("charts/epsilon", epsilon, global_step)
         if random.random() < epsilon:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
         else:
@@ -259,6 +260,8 @@ if __name__ == "__main__":
                 if global_step % 100 == 0:
                     writer.add_scalar("losses/td_loss", jax.device_get(loss), global_step)
                     writer.add_scalar("losses/q_values", jax.device_get(old_val).mean(), global_step)
+                    writer.add_scalar("losses/max_q_value", jax.device_get(old_val).max(), global_step)
+                    writer.add_scalar("charts/buffer_occupancy", rb.size, global_step)
                     print("SPS:", int(global_step / (time.time() - start_time)))
                     writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
@@ -267,6 +270,7 @@ if __name__ == "__main__":
                 q_state = q_state.replace(
                     target_params=optax.incremental_update(q_state.params, q_state.target_params, args.tau)
                 )
+                writer.add_scalar("charts/target_update", 1, global_step)
 
     if args.save_model:
         model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
