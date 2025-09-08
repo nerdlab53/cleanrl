@@ -37,7 +37,7 @@ class Args:
     """seed of the experiment"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "cleanRL-jax"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
