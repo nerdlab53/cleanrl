@@ -263,7 +263,7 @@ if __name__ == "__main__":
                     writer.add_scalar("losses/td_loss", jax.device_get(loss), global_step)
                     writer.add_scalar("losses/q_values", jax.device_get(old_val).mean(), global_step)
                     writer.add_scalar("losses/max_q_value", jax.device_get(old_val).max(), global_step)
-                    writer.add_scalar("charts/buffer_occupancy", rb.size, global_step)
+                    # writer.add_scalar("charts/buffer_occupancy", rb.size, global_step)
                     print("SPS:", int(global_step / (time.time() - start_time)))
                     writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
