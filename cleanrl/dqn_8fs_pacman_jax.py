@@ -153,6 +153,14 @@ if __name__ == "__main__":
             save_code=True,
         )
     writer = SummaryWriter(f"runs/{run_name}")
+    # helper: always write to TensorBoard; mirror to W&B with explicit step when tracking is enabled
+    def wb_log(tag: str, value, step: int):
+        if args.track:
+            try:
+                wandb.log({tag: float(value) if hasattr(value, "__float__") else value}, step=step)
+            except Exception:
+                # best-effort logging; never crash training due to logging
+                pass
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -217,6 +225,7 @@ if __name__ == "__main__":
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
         writer.add_scalar("charts/epsilon", epsilon, global_step)
+        wb_log("charts/epsilon", epsilon, global_step)
         if random.random() < epsilon:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
         else:
@@ -234,6 +243,8 @@ if __name__ == "__main__":
                     print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                     writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+                    wb_log("charts/episodic_return", info["episode"]["r"], global_step)
+                    wb_log("charts/episodic_length", info["episode"]["l"], global_step)
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
         real_next_obs = next_obs.copy()
@@ -260,12 +271,20 @@ if __name__ == "__main__":
                 )
 
                 if global_step % 100 == 0:
-                    writer.add_scalar("losses/td_loss", jax.device_get(loss), global_step)
-                    writer.add_scalar("losses/q_values", jax.device_get(old_val).mean(), global_step)
-                    writer.add_scalar("losses/max_q_value", jax.device_get(old_val).max(), global_step)
-                    # writer.add_scalar("charts/buffer_occupancy", rb.size, global_step)
+                    _loss = float(jax.device_get(loss))
+                    _q_mean = float(jax.device_get(old_val).mean())
+                    _q_max = float(jax.device_get(old_val).max())
+                    writer.add_scalar("losses/td_loss", _loss, global_step)
+                    writer.add_scalar("losses/q_values", _q_mean, global_step)
+                    writer.add_scalar("losses/max_q_value", _q_max, global_step)
+                    wb_log("losses/td_loss", _loss, global_step)
+                    wb_log("losses/q_values", _q_mean, global_step)
+                    wb_log("losses/max_q_value", _q_max, global_step)
+                    # writer.add_scalar("charts/buffer_occupancy", rb.size, global_step)  # optional
                     print("SPS:", int(global_step / (time.time() - start_time)))
-                    writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+                    _sps = int(global_step / (time.time() - start_time))
+                    writer.add_scalar("charts/SPS", _sps, global_step)
+                    wb_log("charts/SPS", _sps, global_step)
 
             # update target network
             if global_step % args.target_network_frequency == 0:
@@ -273,6 +292,7 @@ if __name__ == "__main__":
                     target_params=optax.incremental_update(q_state.params, q_state.target_params, args.tau)
                 )
                 writer.add_scalar("charts/target_update", 1, global_step)
+                wb_log("charts/target_update", 1, global_step)
 
     if args.save_model:
         model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
@@ -302,6 +322,8 @@ if __name__ == "__main__":
         for idx, (episodic_return, episodic_length) in enumerate(zip(eval_episodic_returns, eval_episodic_lengths)):
             writer.add_scalar("eval/episodic_return", episodic_return, idx)
             writer.add_scalar("eval/episodic_length", episodic_length, idx)
+            wb_log("eval/episodic_return", episodic_return, idx)
+            wb_log("eval/episodic_length", episodic_length, idx)
         if args.save_model:
             # Save evaluation results to file
             eval_results_path = f"runs/{run_name}/eval_results_seed{args.seed}.txt"
