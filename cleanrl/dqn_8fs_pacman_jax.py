@@ -18,7 +18,6 @@ import optax
 import tyro
 from flax.training.train_state import TrainState
 from torch.utils.tensorboard import SummaryWriter
-import signal
 
 from cleanrl_utils.atari_wrappers import (
     ClipRewardEnv,
@@ -212,22 +211,9 @@ if __name__ == "__main__":
     start_time = time.time()
 
     episodic_returns = []
-    # graceful shutdown handling (CTRL+C or SIGTERM)
-    shutdown = False
-
-    def _request_shutdown(signum, frame):
-        nonlocal shutdown
-        shutdown = True
-
-    signal.signal(signal.SIGTERM, _request_shutdown)
-    signal.signal(signal.SIGINT, _request_shutdown)
-
-    try:
-        # TRY NOT TO MODIFY: start the game
-        obs, _ = envs.reset(seed=args.seed)
-        for global_step in range(args.total_timesteps):
-            if shutdown:
-                break
+    # TRY NOT TO MODIFY: start the game
+    obs, _ = envs.reset(seed=args.seed)
+    for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
         writer.add_scalar("charts/epsilon", epsilon, global_step)
@@ -292,17 +278,7 @@ if __name__ == "__main__":
                     target_params=optax.incremental_update(q_state.params, q_state.target_params, args.tau)
                 )
                 writer.add_scalar("charts/target_update", 1, global_step)
-    finally:
-        # ensure resources are closed cleanly to avoid lingering metric samplers
-        envs.close()
-        writer.close()
-        try:
-            if args.track:
-                import wandb
-                wandb.finish()
-        except Exception:
-            pass
-
+    
     if episodic_returns:
         print(f"Average episodic return over training : {np.mean(episodic_returns)}")
 
