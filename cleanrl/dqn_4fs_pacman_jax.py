@@ -5,7 +5,8 @@ import time
 from dataclasses import dataclass
 
 # see https://github.com/google/jax/discussions/6332#discussioncomment-1279991
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.7"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.7"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.1"
 
 import flax
 import flax.linen as nn
@@ -34,9 +35,9 @@ class Args:
     """the name of this experiment"""
     seed: int = 1
     """seed of the experiment"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL-jax"
+    wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -50,7 +51,7 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "ALE/MsPacman-v5"
+    env_id: str = "MsPacman-v4"
     """the id of the environment"""
     total_timesteps: int = 2_000_000
     """total timesteps of the experiments"""
@@ -209,6 +210,7 @@ if __name__ == "__main__":
 
     start_time = time.time()
 
+    episodic_returns = []
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
@@ -229,6 +231,7 @@ if __name__ == "__main__":
         if "final_info" in infos:
             for info in infos["final_info"]:
                 if info and "episode" in info:
+                    episodic_returns.append(info['episode']['r'])
                     print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                     writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
@@ -258,12 +261,16 @@ if __name__ == "__main__":
                 )
 
                 if global_step % 100 == 0:
-                    writer.add_scalar("losses/td_loss", jax.device_get(loss), global_step)
-                    writer.add_scalar("losses/q_values", jax.device_get(old_val).mean(), global_step)
-                    writer.add_scalar("losses/max_q_value", jax.device_get(old_val).max(), global_step)
-                    writer.add_scalar("charts/buffer_occupancy", rb.size, global_step)
+                    _loss = float(jax.device_get(loss))
+                    _q_mean = float(jax.device_get(old_val).mean())
+                    _q_max = float(jax.device_get(old_val).max())
+                    writer.add_scalar("losses/td_loss", _loss, global_step)
+                    writer.add_scalar("losses/q_values", _q_mean, global_step)
+                    writer.add_scalar("losses/max_q_value", _q_max, global_step)
+                    # writer.add_scalar("charts/buffer_occupancy", rb.size, global_step)  # optional
                     print("SPS:", int(global_step / (time.time() - start_time)))
-                    writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+                    _sps = int(global_step / (time.time() - start_time))
+                    writer.add_scalar("charts/SPS", _sps, global_step)
 
             # update target network
             if global_step % args.target_network_frequency == 0:
@@ -271,6 +278,9 @@ if __name__ == "__main__":
                     target_params=optax.incremental_update(q_state.params, q_state.target_params, args.tau)
                 )
                 writer.add_scalar("charts/target_update", 1, global_step)
+    
+    if episodic_returns:
+        print(f"Average episodic return over training : {np.mean(episodic_returns)}")
 
     if args.save_model:
         model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
