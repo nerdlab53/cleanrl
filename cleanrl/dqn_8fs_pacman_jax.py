@@ -10,7 +10,9 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.3"
 
 import flax
 import flax.linen as nn
-import gymnasium as gym
+# import gymnasium as gym  # replaced by EnvPool below
+from gymnasium import spaces as gym_spaces
+import envpool
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -19,13 +21,13 @@ import tyro
 from flax.training.train_state import TrainState
 from torch.utils.tensorboard import SummaryWriter
 
-from cleanrl_utils.atari_wrappers import (
-    ClipRewardEnv,
-    EpisodicLifeEnv,
-    FireResetEnv,
-    MaxAndSkipEnv,
-    NoopResetEnv,
-)
+# from cleanrl_utils.atari_wrappers import (
+#     ClipRewardEnv,
+#     EpisodicLifeEnv,
+#     FireResetEnv,
+#     MaxAndSkipEnv,
+#     NoopResetEnv,
+# )
 from cleanrl_utils.buffers import ReplayBuffer
 
 
@@ -53,7 +55,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "MsPacman-v4"
     """the id of the environment"""
-    total_timesteps: int = 2_000_000
+    total_timesteps: int = 1_000_000
     """total timesteps of the experiments"""
     learning_rate: float = 1e-4
     """the learning rate of the optimizer"""
@@ -81,30 +83,52 @@ class Args:
     """the frequency of training"""
 
 
+# def make_env(env_id, seed, idx, capture_video, run_name):
+#     def thunk():
+#         if capture_video and idx == 0:
+#             env = gym.make(env_id, render_mode="rgb_array")
+#             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+#         else:
+#             env = gym.make(env_id)
+#         env = gym.wrappers.RecordEpisodeStatistics(env)
+#
+#         env = NoopResetEnv(env, noop_max=30)
+#         env = MaxAndSkipEnv(env, skip=4)
+#         env = EpisodicLifeEnv(env)
+#         if "FIRE" in env.unwrapped.get_action_meanings():
+#             env = FireResetEnv(env)
+#         env = ClipRewardEnv(env)
+#         env = gym.wrappers.ResizeObservation(env, (84, 84))
+#         env = gym.wrappers.GrayScaleObservation(env)
+#         env = gym.wrappers.FrameStack(env, 8)
+#
+#         env.action_space.seed(seed)
+#         return env
+#
+#     return thunk
+
+
+# Provide an EnvPool-based make_env for evaluation compatibility
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
-        if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = gym.make(env_id)
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-
-        env = NoopResetEnv(env, noop_max=30)
-        env = MaxAndSkipEnv(env, skip=4)
-        env = EpisodicLifeEnv(env)
-        if "FIRE" in env.unwrapped.get_action_meanings():
-            env = FireResetEnv(env)
-        env = ClipRewardEnv(env)
-        env = gym.wrappers.ResizeObservation(env, (84, 84))
-        env = gym.wrappers.GrayScaleObservation(env)
-        env = gym.wrappers.FrameStack(env, 8)
-
-        env.action_space.seed(seed)
-        return env
+        envs = envpool.make(
+            env_id,
+            env_type="gym",
+            num_envs=1,
+            episodic_life=True,
+            reward_clip=True,
+            seed=seed,
+            stack_num=8,
+            frame_skip=4,
+            noop_max=30,
+        )
+        envs.num_envs = 1
+        envs.single_action_space = envs.action_space
+        envs.single_observation_space = envs.observation_space
+        envs.is_vector_env = True
+        return envs
 
     return thunk
-
 
 # ALGO LOGIC: initialize agent here:
 class QNetwork(nn.Module):
@@ -163,15 +187,33 @@ if __name__ == "__main__":
     key = jax.random.PRNGKey(args.seed)
     key, q_key = jax.random.split(key, 2)
 
-    # env setup
-    envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+    # env setup (EnvPool replacement)
+    # Original gymnasium vectorized env:
+    # envs = gym.vector.SyncVectorEnv(
+    #     [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+    # )
+    # assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
+    # obs, _ = envs.reset(seed=args.seed)
+
+    # Create EnvPool Atari env with equivalent preprocessing
+    envs = envpool.make(
+        args.env_id,
+        env_type="gym",
+        num_envs=args.num_envs,
+        seed=args.seed,
+        stack_num=8,
+        frame_skip=4,
+        noop_max=30,
+        episodic_life=True,
+        reward_clip=True,
     )
-    assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
+    # Reset and ensure channel-first (N, C, H, W)
     obs, _ = envs.reset(seed=args.seed)
+    if obs.ndim == 4 and obs.shape[-1] in (4, 8) and obs.shape[1] not in (4, 8):
+        obs = np.transpose(obs, (0, 3, 1, 2))
 
-    q_network = QNetwork(action_dim=envs.single_action_space.n)
+    q_network = QNetwork(action_dim=envs.action_space.n)
 
     q_state = TrainState.create(
         apply_fn=q_network.apply,
@@ -184,10 +226,12 @@ if __name__ == "__main__":
     # This step is not necessary as init called on same observation and key will always lead to same initializations
     q_state = q_state.replace(target_params=optax.incremental_update(q_state.params, q_state.target_params, 1))
 
+    # Use NCHW observation space for the replay buffer to match model input
+    nchw_obs_space = gym_spaces.Box(low=0, high=255, shape=(8, 84, 84), dtype=np.uint8)
     rb = ReplayBuffer(
         args.buffer_size,
-        envs.single_observation_space,
-        envs.single_action_space,
+        (nchw_obs_space or envs.observation_space),
+        envs.action_space,
         "cpu",
         optimize_memory_usage=True,
         handle_timeout_termination=False,
@@ -213,12 +257,14 @@ if __name__ == "__main__":
     episodic_returns = []
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)
+    if obs.ndim == 4 and obs.shape[-1] in (4, 8) and obs.shape[1] not in (4, 8):
+        obs = np.transpose(obs, (0, 3, 1, 2))
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
         writer.add_scalar("charts/epsilon", epsilon, global_step)
         if random.random() < epsilon:
-            actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
+            actions = np.array([envs.action_space.sample() for _ in range(envs.num_envs)])
         else:
             q_values = q_network.apply(q_state.params, obs)
             actions = q_values.argmax(axis=-1)
@@ -226,6 +272,8 @@ if __name__ == "__main__":
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
+        if next_obs.ndim == 4 and next_obs.shape[-1] in (4, 8) and next_obs.shape[1] not in (4, 8):
+            next_obs = np.transpose(next_obs, (0, 3, 1, 2))
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if "final_info" in infos:
